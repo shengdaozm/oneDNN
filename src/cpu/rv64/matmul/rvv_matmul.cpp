@@ -44,8 +44,6 @@ status_t riscv_matmul_t<data_type::f32>::execute(const exec_ctx_t &ctx) const {
     const dim_t N = helper.N();
     const dim_t K = helper.K();
     const dim_t batch = helper.batch();
-    const dim_t src_stride = helper.get_a_stride(src_d.ndims() - 2);
-    const dim_t weights_stride = helper.get_b_stride(weights_d.ndims() - 1);
 
     // Get attribute related data
     const auto &attr = *pd()->attr();
@@ -63,49 +61,43 @@ status_t riscv_matmul_t<data_type::f32>::execute(const exec_ctx_t &ctx) const {
     
     // rvv_kernel
     auto rvv_matmul_kernel = [&](const dims_t &dst_dims_idx, dim_t m, dim_t n) -> float {
-        dims_t src_dims_idx, weights_dims_idx;
-        utils::copy_dims_with_mask(src_dims_idx, dst_dims_idx, ndims, src_mask);
-        utils::copy_dims_with_mask(weights_dims_idx, dst_dims_idx, ndims, wei_mask);
-        
-        src_dims_idx[ndims - 2] = m;
-        weights_dims_idx[ndims - 1] = n;
-        auto &src_k_dim = src_dims_idx[ndims - 1];
-        auto &wei_k_dim = weights_dims_idx[ndims - 2];
+    dims_t src_dims_idx, weights_dims_idx;
+    utils::copy_dims_with_mask(src_dims_idx, dst_dims_idx, ndims, src_mask);
+    utils::copy_dims_with_mask(weights_dims_idx, dst_dims_idx, ndims, wei_mask);
 
-        float acc = 0.0f;
+    src_dims_idx[ndims - 2] = m;
+    src_dims_idx[ndims - 1] = 0; 
+    
+    weights_dims_idx[ndims - 2] = 0; 
+    weights_dims_idx[ndims - 1] = n;
+
+    const float *src_base_ptr = src + src_d.off_v(src_dims_idx);
+    const float *weights_base_ptr = weights + weights_d.off_v(weights_dims_idx);
+    
+    const dim_t weights_k_stride = helper.get_b_stride(ndims - 2);
+    
+    vfloat32m1_t acc_vec = __riscv_vfmv_v_f_f32m1(0.0f, __riscv_vsetvlmax_e32m1());
+
+    for (dim_t k = 0; k < K; ) {
+        size_t vl = __riscv_vsetvl_e32m1(K - k);
         
-        for (dim_t k = 0; k < K; ) {
-            size_t vl = __riscv_vsetvl_e32m1(K - k);
-            
-            // rvv function need memory aligned
-            float src_vals[vl], weights_vals[vl];
-            
-            // fill the vector with val from src and weight
-            for (size_t i = 0; i < vl; ++i) {
-                src_k_dim = k + i;
-                wei_k_dim = k + i;
-                
-                const auto src_off = src_d.off_v(src_dims_idx);
-                const auto weights_off = weights_d.off_v(weights_dims_idx);
-                
-                src_vals[i] = io::load_float_value(data_type::f32, src, src_off);
-                weights_vals[i] = io::load_float_value(data_type::f32, weights, weights_off);
-            }
-            
-            vfloat32m1_t vec_src = __riscv_vle32_v_f32m1(src_vals, vl);
-            vfloat32m1_t vec_weights = __riscv_vle32_v_f32m1(weights_vals, vl);
-            vfloat32m1_t vec_mul = __riscv_vfmul_vv_f32m1(vec_src, vec_weights, vl);
-            vfloat32m1_t vec_sum = __riscv_vfredusum_vs_f32m1_f32m1(vec_mul, __riscv_vfmv_s_f_f32m1(0.0f, 1), vl);
-            acc += __riscv_vfmv_f_s_f32m1_f32(vec_sum);
-            
-            k += vl;
-        }
-        return acc;
-    };
+        const float *weights_current_ptr = weights_base_ptr + k * weights_k_stride;
+
+        vfloat32m1_t vec_src = __riscv_vle32_v_f32m1(src_base_ptr + k, vl);
+        vfloat32m1_t vec_weights = __riscv_vlse32_v_f32m1(weights_current_ptr, weights_k_stride * sizeof(float), vl);
+        
+        acc_vec = __riscv_vfmacc_vv_f32m1(acc_vec, vec_src, vec_weights, vl);
+        
+        k += vl;
+    }
+    
+    vfloat32m1_t sum_vec = __riscv_vfredusum_vs_f32m1_f32m1(acc_vec, __riscv_vfmv_v_f_f32m1(0.0f, __riscv_vsetvlmax_e32m1()), __riscv_vsetvlmax_e32m1());
+    
+    return __riscv_vfmv_f_s_f32m1_f32(sum_vec);
+};
 
     // calulate without rvv if K< vlen
     auto scalar_kernel = [&](const dims_t &dst_dims_idx, dim_t m, dim_t n) -> float {
-        float acc = 0.0f;
         dims_t src_dims_idx, weights_dims_idx;
         utils::copy_dims_with_mask(src_dims_idx, dst_dims_idx, ndims, src_mask);
         utils::copy_dims_with_mask(weights_dims_idx, dst_dims_idx, ndims, wei_mask);
@@ -115,6 +107,7 @@ status_t riscv_matmul_t<data_type::f32>::execute(const exec_ctx_t &ctx) const {
         auto &src_k_dim = src_dims_idx[ndims - 1];
         auto &wei_k_dim = weights_dims_idx[ndims - 2];
         
+        float acc = 0.0f;
         for (dim_t k = 0; k < K; ++k) {
             src_k_dim = k;
             wei_k_dim = k;
