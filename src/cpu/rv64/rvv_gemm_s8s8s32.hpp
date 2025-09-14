@@ -19,6 +19,7 @@
 #include "common/primitive.hpp"
 #include "cpu/matmul/cpu_matmul_pd.hpp"
 #include "cpu/rv64/rvv_postops.hpp"
+#include "common/utils.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -122,8 +123,11 @@ struct rvv_gemm_s8s8s32_t : public primitive_t {
         bool check_layouts(const memory_desc_wrapper &src_mdw,
                 const memory_desc_wrapper &wei_mdw,
                 const memory_desc_wrapper &dst_mdw) const {
-            if (!is_row_major(src_mdw) || !is_row_major(dst_mdw)) return false;
+            if (!is_row_major(src_mdw) && !is_col_major(src_mdw)) return false;
+            if (!is_row_major(dst_mdw)) return false;
             if (!is_row_major(wei_mdw) && !is_col_major(wei_mdw)) return false;
+            // Disable the unsupported case for now
+            if (is_col_major(src_mdw) && is_col_major(wei_mdw)) return false;
             return true;
         }
 
@@ -131,22 +135,15 @@ struct rvv_gemm_s8s8s32_t : public primitive_t {
                 const memory_desc_wrapper &bias_mdw) const {
             if (bias_mdw.is_zero()) return true;
 
-            if (bias_mdw.data_type() != data_type::s32) return false;
+            const bool types_ok = one_of(bias_mdw.data_type(), data_type::s32, data_type::f32, data_type::s8, data_type::u8);
+            if (!types_ok) return false;
 
-            const int dst_ndims = dst_mdw.ndims();
-            const int bias_ndims = bias_mdw.ndims();
-            if (bias_ndims > dst_ndims) return false;
-
-            const auto *dst_dims = dst_mdw.dims();
-            const auto *bias_dims = bias_mdw.dims();
-
-            for (int d = 1; d <= bias_ndims; ++d) {
-                const dim_t bias_dim = bias_dims[bias_ndims - d];
-                const dim_t dst_dim = dst_dims[dst_ndims - d];
-                if (bias_dim != 1 && bias_dim != dst_dim) return false;
-            }
+            // Further checks can be added here
             return true;
         }
+
+        int32_t src_zero_point_;
+        int32_t weights_zero_point_;
     };
 
     rvv_gemm_s8s8s32_t(const pd_t *apd);

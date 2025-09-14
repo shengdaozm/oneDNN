@@ -124,8 +124,10 @@ struct rvv_matmul_t : public primitive_t {
         bool check_layouts(const memory_desc_wrapper &src_mdw,
                 const memory_desc_wrapper &wei_mdw,
                 const memory_desc_wrapper &dst_mdw) const {
-            if (!is_row_major(src_mdw) || !is_row_major(dst_mdw)) return false;
+            if (!is_row_major(src_mdw) && !is_col_major(src_mdw)) return false;
+            if (!is_row_major(dst_mdw) && !is_col_major(dst_mdw)) return false; // Allow col-major dst
             if (!is_row_major(wei_mdw) && !is_col_major(wei_mdw)) return false;
+            // Allow col-major src and col-major weights
             return true;
         }
 
@@ -133,7 +135,7 @@ struct rvv_matmul_t : public primitive_t {
                 const memory_desc_wrapper &bias_mdw) const {
             if (bias_mdw.is_zero()) return true;
 
-            if (bias_mdw.data_type() != d_type) return false;
+            if (bias_mdw.data_type() != d_type && bias_mdw.data_type() != data_type::s8) return false;
 
             const int dst_ndims = dst_mdw.ndims();
             const int bias_ndims = bias_mdw.ndims();
@@ -158,10 +160,71 @@ private:
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
 };
 
+void rvv_matmul_colmajor(const float *src, const float *weights, float *dst,
+        const memory_desc_wrapper &src_d, const memory_desc_wrapper &weights_d,
+        const memory_desc_wrapper &dst_d, const float *bias,
+        const memory_desc_wrapper &bias_d,
+        const rvv_postops_t &postops_handler);
+
+void rvv_matmul_rowmajor(const float *src, const float *weights, float *dst,
+        const memory_desc_wrapper &src_d, const memory_desc_wrapper &weights_d,
+        const memory_desc_wrapper &dst_d, const float *bias,
+        const memory_desc_wrapper &bias_d,
+        const rvv_postops_t &postops_handler);
+
+void rvv_matmul_colmajor_src_colmajor_wei(const float *src, const float *weights, float *dst,
+        const memory_desc_wrapper &src_d, const memory_desc_wrapper &weights_d,
+        const memory_desc_wrapper &dst_d, const float *bias,
+        const memory_desc_wrapper &bias_d,
+        const rvv_postops_t &postops_handler);
+
+struct rvv_gemm_s8s8f32_t : public primitive_t {
+    struct pd_t : public ::dnnl::impl::cpu::matmul::cpu_matmul_pd_t {
+        using ::dnnl::impl::cpu::matmul::cpu_matmul_pd_t::cpu_matmul_pd_t;
+
+        bool check_bias(const memory_desc_wrapper &dst_mdw,
+                const memory_desc_wrapper &bias_mdw) const;
+
+        int32_t src_zero_point_;
+        int32_t weights_zero_point_;
+    };
+
+    rvv_gemm_s8s8f32_t(const pd_t *apd);
+    status_t execute(const exec_ctx_t &ctx) const;
+
+private:
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
+};
+
+struct rvv_gemm_u8u8u32_t : public primitive_t {
+    struct pd_t : public ::dnnl::impl::cpu::matmul::cpu_matmul_pd_t {
+        using ::dnnl::impl::cpu::matmul::cpu_matmul_pd_t::cpu_matmul_pd_t;
+
+        DECLARE_COMMON_PD_T("RISCV64GCV", rvv_gemm_u8u8u32_t)
+
+        status_t init(engine_t *engine);
+        bool is_row_major(const memory_desc_wrapper &mdw) const;
+        bool is_col_major(const memory_desc_wrapper &mdw) const;
+        bool check_layouts(const memory_desc_wrapper &src_mdw,
+                const memory_desc_wrapper &wei_mdw,
+                const memory_desc_wrapper &dst_mdw) const;
+        bool check_bias(const memory_desc_wrapper &dst_mdw,
+                const memory_desc_wrapper &bias_mdw) const;
+
+        int32_t src_zero_point_;
+        int32_t weights_zero_point_;
+    };
+
+    rvv_gemm_u8u8u32_t(const pd_t *apd);
+    status_t execute(const exec_ctx_t &ctx) const;
+
+private:
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
+};
+
 } // namespace matmul
 } // namespace rv64
 } // namespace cpu
 } // namespace impl
-} // namespace dnnl
 
 #endif // CPU_RV64_RVV_MATMUL_HPP

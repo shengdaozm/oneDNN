@@ -80,6 +80,8 @@ constexpr impl_list_item_t impl_list[] = REG_MATMUL_P({
         CPU_INSTANCE_AVX2(brgemm_matmul_t<avx2_vnni>)
         CPU_INSTANCE_RV64GCV(rvv_matmul_t)
         CPU_INSTANCE_RV64GCV(rvv_gemm_s8s8s32_t)
+        CPU_INSTANCE_RV64GCV(rvv_gemm_s8s8f32_t)
+        CPU_INSTANCE_RV64GCV(rvv_gemm_u8u8u32_t)
         CPU_INSTANCE(gemm_f32_matmul_t)
         CPU_INSTANCE(gemm_bf16_matmul_t<f32>)
         CPU_INSTANCE(gemm_bf16_matmul_t<bf16>)
