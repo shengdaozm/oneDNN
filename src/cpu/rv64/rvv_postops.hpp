@@ -52,6 +52,26 @@ struct rvv_postops_t {
         }
     }
 
+    inline vint32m2_t apply(vint32m2_t v, size_t vl) const {
+        switch (alg_) {
+            case alg_kind::eltwise_relu: {
+                vint32m2_t zero = __riscv_vmv_v_x_i32m2(0, vl);
+                return __riscv_vmax_vv_i32m2(v, zero, vl);
+            }
+            default: return v;
+        }
+    }
+
+    inline vint32m4_t apply(vint32m4_t v, size_t vl) const {
+        switch (alg_) {
+            case alg_kind::eltwise_relu: {
+                vint32m4_t zero = __riscv_vmv_v_x_i32m4(0, vl);
+                return __riscv_vmax_vv_i32m4(v, zero, vl);
+            }
+            default: return v;
+        }
+    }
+
 private:
     alg_kind_t alg_;
 };
